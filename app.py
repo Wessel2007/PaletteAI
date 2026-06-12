@@ -2,7 +2,7 @@ import streamlit as st
 import json
 import re
 import io
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from colorthief import ColorThief
 from groq import Groq
 from dotenv import load_dotenv
@@ -168,6 +168,111 @@ def rgb_to_hex(rgb: tuple) -> str:
     return "#{:02x}{:02x}{:02x}".format(*rgb).upper()
 
 
+def generate_palette_png(colors: list[dict]) -> bytes:
+    BLOCK_W = 220
+    SWATCH_H = 220
+    BLOCK_GAP = 28
+    PAD_X = 48
+    PAD_Y = 48
+    TEXT_PAD = 14
+    LINE_SPACING = 6
+    CORNER_R = 16
+    BG_COLOR = (14, 14, 20)
+    CARD_BG = (26, 26, 46)
+    NAME_COLOR = (196, 196, 224)
+    HEX_COLOR = (232, 232, 240)
+
+    _FONT_REGULAR = [
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]
+    _FONT_BOLD = [
+        "C:/Windows/Fonts/segoeuib.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]
+
+    def _load_font(candidates, size):
+        for path in candidates:
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                pass
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:
+            return ImageFont.load_default()
+
+    font_name = _load_font(_FONT_REGULAR, 18)
+    font_hex = _load_font(_FONT_BOLD, 22)
+
+    # Mede alturas reais do texto para calcular o bloco de informação
+    _probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    name_h = _probe.textbbox((0, 0), "Ag", font=font_name)[3]
+    hex_h = _probe.textbbox((0, 0), "#FFFFFF", font=font_hex)[3]
+    INFO_H = TEXT_PAD + name_h + LINE_SPACING + hex_h + TEXT_PAD
+
+    n = len(colors)
+    img_w = PAD_X * 2 + n * BLOCK_W + (n - 1) * BLOCK_GAP
+    img_h = PAD_Y * 2 + SWATCH_H + INFO_H
+
+    img = Image.new("RGB", (img_w, img_h), BG_COLOR)
+    draw = ImageDraw.Draw(img)
+
+    for i, cor in enumerate(colors):
+        hex_val = cor["hex"].upper()
+        nome = cor.get("nome", "")
+        x = PAD_X + i * (BLOCK_W + BLOCK_GAP)
+        y = PAD_Y
+
+        # Card com fundo escuro (swatch + texto)
+        draw.rounded_rectangle(
+            [x, y, x + BLOCK_W, y + SWATCH_H + INFO_H],
+            radius=CORNER_R,
+            fill=CARD_BG,
+        )
+
+        # Swatch colorido — cantos arredondados só no topo
+        draw.rounded_rectangle(
+            [x, y, x + BLOCK_W, y + SWATCH_H],
+            radius=CORNER_R,
+            fill=hex_val,
+        )
+        # Cobre os cantos inferiores arredondados do swatch para fundir com o card
+        draw.rectangle(
+            [x, y + SWATCH_H - CORNER_R, x + BLOCK_W, y + SWATCH_H],
+            fill=hex_val,
+        )
+
+        cx = x + BLOCK_W // 2
+
+        # Nome criativo (centralizado)
+        nb = draw.textbbox((0, 0), nome, font=font_name)
+        draw.text(
+            (cx - (nb[2] - nb[0]) // 2, y + SWATCH_H + TEXT_PAD),
+            nome,
+            fill=NAME_COLOR,
+            font=font_name,
+        )
+
+        # Código hex (centralizado, negrito)
+        hb = draw.textbbox((0, 0), hex_val, font=font_hex)
+        draw.text(
+            (cx - (hb[2] - hb[0]) // 2, y + SWATCH_H + TEXT_PAD + name_h + LINE_SPACING),
+            hex_val,
+            fill=HEX_COLOR,
+            font=font_hex,
+        )
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def render_palette(colors: list[dict]):
     """Renderiza blocos de cor lado a lado.
 
@@ -281,6 +386,12 @@ with tab_imagem:
                     colors = extract_colors_from_image(image_bytes)
                     st.markdown("#### Paleta extraída")
                     render_palette(colors)
+                    st.download_button(
+                        label="⬇️ Baixar paleta como PNG",
+                        data=generate_palette_png(colors),
+                        file_name="paleta.png",
+                        mime="image/png",
+                    )
                 except Exception as e:
                     st.error(f"Erro ao processar imagem: {e}")
 
@@ -308,6 +419,11 @@ with tab_texto:
 
     gerar = st.button("✨ Gerar Paleta", use_container_width=False)
 
+    if "texto_colors" not in st.session_state:
+        st.session_state.texto_colors = None
+    if "texto_vibe" not in st.session_state:
+        st.session_state.texto_vibe = ""
+
     if gerar:
         if not groq_api_key:
             st.warning("Insira sua Groq API Key para continuar.")
@@ -317,7 +433,18 @@ with tab_texto:
             with st.spinner(f'Criando paleta para "{vibe_input}"...'):
                 try:
                     colors = generate_palette_from_text(vibe_input.strip(), groq_api_key)
-                    st.markdown(f"#### Paleta: *{vibe_input}*")
-                    render_palette(colors)
+                    st.session_state.texto_colors = colors
+                    st.session_state.texto_vibe = vibe_input.strip()
                 except Exception as e:
                     st.error(f"Erro ao gerar paleta: {e}")
+                    st.session_state.texto_colors = None
+
+    if st.session_state.texto_colors:
+        st.markdown(f"#### Paleta: *{st.session_state.texto_vibe}*")
+        render_palette(st.session_state.texto_colors)
+        st.download_button(
+            label="⬇️ Baixar paleta como PNG",
+            data=generate_palette_png(st.session_state.texto_colors),
+            file_name="paleta.png",
+            mime="image/png",
+        )
