@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import re
 import io
+import colorsys
 from PIL import Image, ImageDraw, ImageFont
 from colorthief import ColorThief
 from groq import Groq
@@ -157,6 +158,58 @@ st.markdown(
         [data-testid="stImage"] img {
             border-radius: 14px;
             box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+        }
+
+        /* ── Seção de Harmonias ── */
+        .harmony-section-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #c4c4e0;
+            margin: 1.6rem 0 0.25rem 0;
+        }
+        .harmony-section-caption {
+            font-size: 0.85rem;
+            color: #6b6b8a;
+            margin-bottom: 1.2rem;
+        }
+        .harmony-group {
+            background: #1a1a2e;
+            border-radius: 16px;
+            padding: 16px 14px 14px 14px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+            height: 100%;
+        }
+        .harmony-group-title {
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: #a78bfa;
+            margin-bottom: 10px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+        .harmony-swatches {
+            display: flex;
+            gap: 7px;
+        }
+        .harmony-card {
+            flex: 1;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+        }
+        .harmony-swatch {
+            width: 100%;
+            height: 80px;
+        }
+        .harmony-hex {
+            background: #12122a;
+            padding: 5px 2px;
+            text-align: center;
+            font-size: 0.65rem;
+            font-weight: 700;
+            font-family: 'Courier New', monospace;
+            color: #e8e8f0;
+            letter-spacing: 0.04em;
         }
     </style>
     """,
@@ -350,6 +403,73 @@ def generate_palette_from_text(vibe: str, api_key: str) -> list[dict]:
     return validated
 
 
+# ─── Harmonias de cor ────────────────────────────────────────────────────────
+
+def _hex_to_hsv(hex_color: str) -> tuple[float, float, float]:
+    hex_color = hex_color.lstrip("#")
+    r = int(hex_color[0:2], 16) / 255
+    g = int(hex_color[2:4], 16) / 255
+    b = int(hex_color[4:6], 16) / 255
+    return colorsys.rgb_to_hsv(r, g, b)
+
+
+def _hsv_to_hex(h: float, s: float, v: float) -> str:
+    r, g, b = colorsys.hsv_to_rgb(h % 1.0, s, v)
+    return "#{:02X}{:02X}{:02X}".format(round(r * 255), round(g * 255), round(b * 255))
+
+
+def compute_harmonies(base_hex: str) -> dict[str, list[str]]:
+    h, s, v = _hex_to_hsv(base_hex)
+    base = base_hex.upper() if base_hex.startswith("#") else f"#{base_hex.upper()}"
+
+    return {
+        "Complementar": [
+            base,
+            _hsv_to_hex(h + 0.5, s, v),
+        ],
+        "Análoga": [
+            _hsv_to_hex(h - 1 / 12, s, v),
+            base,
+            _hsv_to_hex(h + 1 / 12, s, v),
+        ],
+        "Triádica": [
+            base,
+            _hsv_to_hex(h + 1 / 3, s, v),
+            _hsv_to_hex(h + 2 / 3, s, v),
+        ],
+    }
+
+
+def render_harmonies(base_hex: str):
+    harmonies = compute_harmonies(base_hex)
+
+    st.markdown("---")
+    st.markdown('<div class="harmony-section-title">🎵 Harmonias</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="harmony-section-caption">Cor base: '
+        f'<code>{base_hex.upper()}</code> &mdash; primeira cor da paleta</div>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(3, gap="medium")
+    for col, (title, hex_list) in zip(cols, harmonies.items()):
+        swatches_html = "".join(
+            f'<div class="harmony-card">'
+            f'<div class="harmony-swatch" style="background-color:{hx};"></div>'
+            f'<div class="harmony-hex">{hx}</div>'
+            f'</div>'
+            for hx in hex_list
+        )
+        with col:
+            st.markdown(
+                f'<div class="harmony-group">'
+                f'<div class="harmony-group-title">{title}</div>'
+                f'<div class="harmony-swatches">{swatches_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+
 # ─── Layout principal ────────────────────────────────────────────────────────
 
 st.markdown('<div class="palette-title">🎨 PaletteAI</div>', unsafe_allow_html=True)
@@ -386,6 +506,7 @@ with tab_imagem:
                     colors = extract_colors_from_image(image_bytes)
                     st.markdown("#### Paleta extraída")
                     render_palette(colors)
+                    render_harmonies(colors[0]["hex"])
                     st.download_button(
                         label="⬇️ Baixar paleta como PNG",
                         data=generate_palette_png(colors),
@@ -442,6 +563,7 @@ with tab_texto:
     if st.session_state.texto_colors:
         st.markdown(f"#### Paleta: *{st.session_state.texto_vibe}*")
         render_palette(st.session_state.texto_colors)
+        render_harmonies(st.session_state.texto_colors[0]["hex"])
         st.download_button(
             label="⬇️ Baixar paleta como PNG",
             data=generate_palette_png(st.session_state.texto_colors),
